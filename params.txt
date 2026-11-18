@@ -1,6 +1,7 @@
 logname nearest.log
 nearest_newzone_threshold 0
 average_value_size 4096
+old_gc 0
 gc_pause_seconds 10
 gc_start_level 5
 gc_stop_level 15

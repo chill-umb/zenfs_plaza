@@ -77,6 +77,7 @@ struct ZenfsParamContainer {
   uint64_t gc_start_level = 20; ///< GC activates when free space falls below this percentage.
   //TODO: gc trigger based on invalid amount of data per zone and/or capacity percentage per zone
   //can mix the two potentially
+  uint8_t old_gc = 0; ///< Whether to use the default zenfs GC code (unstable)
   uint64_t gc_stop_level = 25;  ///< GC stops when free space recovers to this percentage.
   uint64_t gc_slope = 3;        ///< GC aggressiveness multiplier.
   uint64_t gc_pause_seconds = 10; ///< Interval in seconds between successive GC activations.
@@ -260,6 +261,11 @@ struct ZenfsParamContainer {
         int value_int = std::stoi(value);
         if(value_int > 0 && value_int < 1000)
           gc_pause_seconds = value_int;
+      }
+
+      else if(type == "old_gc") {
+        int value_int = std::stoi(value);
+        old_gc = value_int;
       }
 
       else if(type == "cold_migration") {

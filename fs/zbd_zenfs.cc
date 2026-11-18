@@ -806,7 +806,9 @@ IOStatus ZonedBlockDevice::AllocateIOZone(Env::WriteLifeTimeHint file_lifetime,
                                           Zone **out_zone,
                                           ZoneFile* zonefile) {
 
-  std::lock_guard<std::mutex> lk(alloc_mutex_);
+  std::unique_lock<std::mutex> lk(alloc_mutex_, std::defer_lock);
+  if (!zenfs_parameters_.old_gc)
+    lk.lock();
   zenfs_parameters_.lock_max_level.lock();
   if(zonefile->level_ > zenfs_parameters_.max_level)
     zenfs_parameters_.max_level = zonefile->level_;

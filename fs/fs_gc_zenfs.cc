@@ -209,7 +209,9 @@ void ZenFS::GCWorker() {
   while (run_gc_worker_) {
     usleep(1000 * 1000 * GC_PAUSE_SECONDS);
     if(!run_gc_worker_) break;
-    std::lock_guard<std::mutex> lk(zbd_->alloc_mutex_);
+    std::unique_lock<std::mutex> lk(zbd_->alloc_mutex_, std::defer_lock);
+    if(!container.old_gc)
+      lk.lock();
 
     uint64_t free_percent = zbd_->GetFreePercent();
     counter++;
@@ -250,65 +252,69 @@ void ZenFS::GCWorker() {
         SelectGarbageZonesDefault(snapshot, free_percent, migrate_zones_start);
     }
 
-    std::vector< std::vector<ZoneExtentSnapshot*> > migrate_ext_list;
-    migrate_ext_list.resize(migrate_zones_start.size()+1);
-    std::map<uint64_t, uint64_t> zone_start_to_idx_map;
-    
-    size_t index = 0;
-    for (auto& zone_start : migrate_zones_start) {
-      zone_start_to_idx_map[zone_start] = index;
-      index++;
-    }
+    if (!container.old_gc) {  // new GC code
+      std::vector< std::vector<ZoneExtentSnapshot*> > migrate_ext_list;
+      migrate_ext_list.resize(migrate_zones_start.size()+1);
+      std::map<uint64_t, uint64_t> zone_start_to_idx_map;
+      
+      size_t index = 0;
+      for (auto& zone_start : migrate_zones_start) {
+        zone_start_to_idx_map[zone_start] = index;
+        index++;
+      }
 
-    // std::vector<ZoneExtentSnapshot*> migrate_exts;
-    for (auto& ext : snapshot.extents_) {
-      if (migrate_zones_start.find(ext.zone_start) !=
-          migrate_zones_start.end()) {
-        index = zone_start_to_idx_map[ext.zone_start];
-        migrate_ext_list[index].push_back(&ext);
-        // migrate_exts.push_back(&ext);
+      // std::vector<ZoneExtentSnapshot*> migrate_exts;
+      for (auto& ext : snapshot.extents_) {
+        if (migrate_zones_start.find(ext.zone_start) !=
+            migrate_zones_start.end()) {
+          index = zone_start_to_idx_map[ext.zone_start];
+          migrate_ext_list[index].push_back(&ext);
+          // migrate_exts.push_back(&ext);
+        }
+      }
+
+      for (index = 0; index < migrate_ext_list.size(); index++) {
+        if (migrate_ext_list[index].size() > 0) {
+          IOStatus s;
+          s = MigrateExtents(migrate_ext_list[index]);
+          if (!s.ok()) {
+            Error(logger_, "Garbage collection failed");
+          }
+        }
       }
     }
 
-    for (index = 0; index < migrate_ext_list.size(); index++) {
-      if (migrate_ext_list[index].size() > 0) {
+    else {  // old GC code
+      std::vector<ZoneExtentSnapshot*> migrate_exts;
+      for (auto& ext : snapshot.extents_) {
+        if (migrate_zones_start.find(ext.zone_start) !=
+            migrate_zones_start.end()) {
+          migrate_exts.push_back(&ext);
+        }
+      }
+
+      if (migrate_exts.size() > 0) {
         IOStatus s;
-        s = MigrateExtents(migrate_ext_list[index]);
+        s = MigrateExtents(migrate_exts);
         if (!s.ok()) {
           Error(logger_, "Garbage collection failed");
         }
       }
     }
 
-    // std::vector<ZoneExtentSnapshot*> migrate_exts;
-    // for (auto& ext : snapshot.extents_) {
-    //   if (migrate_zones_start.find(ext.zone_start) !=
-    //       migrate_zones_start.end()) {
-    //     migrate_exts.push_back(&ext);
-    //   }
-    // }
-
-    // if (migrate_exts.size() > 0) {
-    //   IOStatus s;
-    //   s = MigrateExtents(migrate_exts);
-    //   if (!s.ok()) {
-    //     Error(logger_, "Garbage collection failed");
-    //   }
-    // }
-
     // fprintf(zbd_->zonestate_logfile_, "------------------\n");
-    for (auto zone_start : migrate_zones_start) {
-      Zone* z = zbd_->zone_start_to_pointer_map_[zone_start];
-      if (!z) continue;
-      if (!z->flag_gc_reset_) continue;
+    // for (auto zone_start : migrate_zones_start) {
+    //   Zone* z = zbd_->zone_start_to_pointer_map_[zone_start];
+    //   if (!z) continue;
+    //   if (!z->flag_gc_reset_) continue;
 
-      uint64_t moved_data = 0;
-      size_t idx = zone_start_to_idx_map[zone_start];
-      for (auto ext : migrate_ext_list[idx])
-        moved_data += ext->length;
+    //   uint64_t moved_data = 0;
+    //   size_t idx = zone_start_to_idx_map[zone_start];
+    //   for (auto ext : migrate_ext_list[idx])
+    //     moved_data += ext->length;
 
-      // fprintf(zbd_->zonestate_logfile_, "Reset Zone: %lu, Moved: %0.4lf MB\n", z->GetZoneNr(), 1.00*moved_data/(1<<20));
-    }
+    //   // fprintf(zbd_->zonestate_logfile_, "Reset Zone: %lu, Moved: %0.4lf MB\n", z->GetZoneNr(), 1.00*moved_data/(1<<20));
+    // }
     // fprintf(zbd_->zonestate_logfile_, "------------------\n");
     // fflush(zbd_->zonestate_logfile_);
 
